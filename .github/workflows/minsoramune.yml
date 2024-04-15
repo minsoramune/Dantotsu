@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK and Notify Discord
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - dev
     paths-ignore:
       - '**/README.md'
-  workflow_dispatch: # Add manual trigger
+  workflow_dispatch: # Manual trigger
 
 jobs:
   build:
@@ -19,6 +19,50 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+
+        
+    - name: Download last SHA artifact
+      uses: dawidd6/action-download-artifact@v3
+      with:
+        workflow: beta.yml
+        name: last-sha
+        path: .
+      
+      continue-on-error: true
+
+    - name: Get Commits Since Last Run
+      run: |
+        if [ -f last_sha.txt ]; then
+          LAST_SHA=$(cat last_sha.txt)
+        else
+          # Fallback to first commit if no previous SHA available
+          LAST_SHA=$(git rev-list --max-parents=0 HEAD)
+        fi
+        echo "Commits since $LAST_SHA:"
+        # Accumulate commit logs in a shell variable
+        COMMIT_LOGS=$(git log $LAST_SHA..HEAD --pretty=format:"● %s ~%an")
+        # URL-encode the newline characters for GitHub Actions
+        COMMIT_LOGS="${COMMIT_LOGS//'%'/'%25'}"
+        COMMIT_LOGS="${COMMIT_LOGS//$'\n'/'%0A'}"
+        COMMIT_LOGS="${COMMIT_LOGS//$'\r'/'%0D'}"
+        # Append the encoded commit logs to the COMMIT_LOG environment variable
+        echo "COMMIT_LOG=${COMMIT_LOGS}" >> $GITHUB_ENV
+        # Debugging: Print the variable to check its content
+        echo "$COMMIT_LOGS"
+      shell: /usr/bin/bash -e {0}
+      env:
+        CI: true
+
+    - name: Save Current SHA for Next Run
+      run: echo ${{ github.sha }} > last_sha.txt
+
+    - name: Set variables
+      run: |
+        VER=$(grep -E -o "versionName \".*\"" app/build.gradle | sed -e 's/versionName //g' | tr -d '"')
+        SHA=${{ github.sha }}
+        VERSION="$VER+${SHA:0:7}"
+        echo "Version $VERSION"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
 
     - name: Setup JDK 17
       uses: actions/setup-java@v4
@@ -46,12 +90,37 @@ jobs:
           path: |
             app/build/outputs/apk/google/alpha/*/*.apk
             app/build/outputs/apk/google/alpha/*/*/*.apk
+            
+    - name: Upload APK to Discord and Telegram
+      if: ${{ github.repository == 'rebelonion/Dantotsu' }}
+      shell: bash
+      run: |
+        #Discord
+        commit_messages=$(echo "$COMMIT_LOG" | sed 's/%0A/\n/g; s/^/\n/')
+        #  Truncate commit messages if they are too long
+        max_length=1900 # Adjust this value as needed
+        if [ ${#commit_messages} -gt $max_length ]; then
+          commit_messages="${commit_messages:0:$max_length}... (truncated)"
+        fi
+        contentbody=$( jq -nc --arg msg "Alpha-Build: <@&1225347048321191996> **$VERSION**:" --arg commits "$commit_messages" '{"content": ($msg + "\n" + $commits)}' )
+        curl -F "payload_json=${contentbody}" -F "dantotsu_debug=@app/build/outputs/apk/google/alpha/app-google-universal-alpha.apk" ${{ secrets.DISCORD_WEBHOOK }}
+        
+        #Telegram
+        curl -F "chat_id=${{ secrets.TELEGRAM_CHANNEL_ID }}" \
+          -F "document=@app/build/outputs/apk/google/alpha/app-google-universal-alpha.apk" \
+          -F "caption=Alpha-Build: ${VERSION}: ${commit_messages}" \
+         https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+
+      env:
+        COMMIT_LOG: ${{ env.COMMIT_LOG }}
+        VERSION: ${{ env.VERSION }}
 
     - name: Upload Current SHA as Artifact
       uses: actions/upload-artifact@v2
       with:
         name: last-sha
         path: last_sha.txt
+
 
     - name: Delete Old Pre-Releases
       id: delete-pre-releases
