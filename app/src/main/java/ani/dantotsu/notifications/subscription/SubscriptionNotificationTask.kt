@@ -31,7 +31,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-
 class SubscriptionNotificationTask : Task {
     private var currentlyPerforming = false
 
@@ -132,6 +131,8 @@ class SubscriptionNotificationTask : Task {
                                     notification
                                 )
                         }
+                        // Mark notification as read
+                        SubscriptionHelper.markNotificationAsRead(it.first)
                     }
 
                     if (progressNotification != null) notificationManager.cancel(
@@ -177,7 +178,6 @@ class SubscriptionNotificationTask : Task {
         }
 
         return builder.build()
-
     }
 
     private fun getProgressNotification(
@@ -201,7 +201,6 @@ class SubscriptionNotificationTask : Task {
             null
         }
     }
-
 
     private fun getIntent(context: Context, mediaId: Int): PendingIntent {
         val notifyIntent = Intent(context, UrlMedia::class.java)
