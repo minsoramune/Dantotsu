@@ -6,6 +6,7 @@ on:
       - dev
     paths-ignore:
       - '**/README.md'
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   build:
