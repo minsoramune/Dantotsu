@@ -6,7 +6,7 @@ on:
       - dev
     paths-ignore:
       - '**/README.md'
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch: # Add manual trigger
 
 jobs:
   build:
@@ -27,6 +27,9 @@ jobs:
         java-version: 17
         cache: gradle
   
+    - name: Decode Keystore File
+      run: echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > $GITHUB_WORKSPACE/key.keystore
+  
     - name: List files in the directory
       run: ls -l
       
@@ -34,7 +37,7 @@ jobs:
       run: chmod +x ./gradlew
   
     - name: Build with Gradle
-      run: ./gradlew assembleGoogleAlpha
+      run: ./gradlew assembleGoogleAlpha -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/key.keystore -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
 
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4.3.1
