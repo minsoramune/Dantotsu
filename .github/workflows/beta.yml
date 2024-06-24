@@ -1,5 +1,3 @@
-name: Build APK and Notify Discord
-
 on:
   push:
     branches:
@@ -33,21 +31,15 @@ jobs:
         if [ -f last_sha.txt ]; then
           LAST_SHA=$(cat last_sha.txt)
         else
-          # Fallback to first commit if no previous SHA available
           LAST_SHA=$(git rev-list --max-parents=0 HEAD)
         fi
         echo "Commits since $LAST_SHA:"
-        # Accumulate commit logs in a shell variable
         COMMIT_LOGS=$(git log $LAST_SHA..HEAD --pretty=format:"● %s ~%an [֍](https://github.com/${{ github.repository }}/commit/%H)")
-        # Replace commit messages with pull request links
         COMMIT_LOGS=$(echo "$COMMIT_LOGS" | sed -E 's/#([0-9]+)/[#\1](https:\/\/github.com\/rebelonion\/Dantotsu\/pull\/\1)/g')
-        # URL-encode the newline characters for GitHub Actions
         COMMIT_LOGS="${COMMIT_LOGS//'%'/'%25'}"
         COMMIT_LOGS="${COMMIT_LOGS//$'\n'/'%0A'}"
         COMMIT_LOGS="${COMMIT_LOGS//$'\r'/'%0D'}"
-        # Append the encoded commit logs to the COMMIT_LOG environment variable
         echo "COMMIT_LOG=${COMMIT_LOGS}" >> $GITHUB_ENV
-        # Debugging: Print the variable to check its content
         echo "$COMMIT_LOGS"
         echo "$COMMIT_LOGS" > commit_log.txt
       shell: /usr/bin/bash -e {0}
@@ -66,40 +58,25 @@ jobs:
         echo "Version $VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-    - name: List files in the directory
-      run: ls -l
-
     - name: Setup JDK 17
-      if: ${{ env.SKIP_BUILD != 'true' }}
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: 17
         cache: gradle
 
-    - name: Decode Keystore File
-      if: ${{ github.repository == 'rebelonion/Dantotsu' }}
-      run: echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > $GITHUB_WORKSPACE/key.keystore
+    - name: List files in the directory
+      run: ls -l
 
     - name: Make gradlew executable
-      if: ${{ env.SKIP_BUILD != 'true' }}
       run: chmod +x ./gradlew
 
     - name: Build with Gradle
-      if: ${{ env.SKIP_BUILD != 'true' }}
-      run: |
-        if [ "${{ github.repository }}" == "rebelonion/Dantotsu" ]; then
-          ./gradlew assembleGoogleAlpha \
-            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/key.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }};
-        else
-          ./gradlew assembleGoogleAlpha;
-        fi
-          
+      if: ${{ env.SKIP_BUILDING_APK != 'true' }}
+      run: ./gradlew assembleGoogleAlpha
+
     - name: Upload a Build Artifact
-      if: ${{ env.SKIP_BUILD != 'true' }}
+      if: ${{ env.SKIP_BUILDING_APK != 'true' }}
       uses: actions/upload-artifact@v4
       with:
           name: Dantotsu
@@ -110,7 +87,6 @@ jobs:
     - name: Upload APK to Discord and Telegram
       shell: bash
       run: |
-        # Prepare Discord embed
         fetch_user_details() {
           local login=$1
           user_details=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -120,22 +96,19 @@ jobs:
           avatar_url=$(echo "$user_details" | jq -r '.avatar_url')
           echo "$name|$login|$avatar_url"
         }
-        # Additional information for the goats
         declare -A additional_info
         additional_info["ibo"]="\n Discord: <@951737931159187457>\n AniList: [takarealist112](<https://anilist.co/user/takarealist112/>)"
         additional_info["aayush262"]="\n Discord: <@918825160654598224>\n AniList: [aayush262](<https://anilist.co/user/aayush262/>)"
         additional_info["rebelonion"]="\n Discord: <@714249925248024617>\n AniList: [rebelonion](<https://anilist.co/user/rebelonion/>)\n PornHub: [rebelonion](<https://www.cornhub.com/model/rebelonion>)" 
         
-        # Count recent commits and create an associative array
         declare -A recent_commit_counts
         while read -r count name; do
             recent_commit_counts["$name"]=$count
         done < <(echo "$COMMIT_LOG" | sed 's/%0A/\n/g' | grep -oP '(?<=~)[^[]*' | sort | uniq -c | sort -rn)
-        # Fetch contributors from GitHub
-        contributors=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                       "https://api.github.com/repos/${{ github.repository }}/contributors")
         
-        # Create a sorted list of contributors based on recent commit counts
+        contributors=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                       "https://api.github.com/repos/Dantotsu-inc/FUCKYML/contributors")
+        
         sorted_contributors=$(for login in $(echo "$contributors" | jq -r '.[].login'); do
             user_info=$(fetch_user_details "$login")
             name=$(echo "$user_info" | cut -d'|' -f1)
@@ -143,7 +116,6 @@ jobs:
             echo "$count|$login"
         done | sort -rn | cut -d'|' -f2)
         
-        # Initialize needed variables
         developers=""
         committers_count=0
         max_commits=0
@@ -151,17 +123,14 @@ jobs:
         top_contributor_count=0
         top_contributor_avatar=""
         
-        # Process contributors in the new order
         while read -r login; do
           user_info=$(fetch_user_details "$login")
           name=$(echo "$user_info" | cut -d'|' -f1)
           login=$(echo "$user_info" | cut -d'|' -f2)
           avatar_url=$(echo "$user_info" | cut -d'|' -f3)
           
-          # Only process if they have recent commits
           commit_count=${recent_commit_counts["$name"]:-0}
           if [ $commit_count -gt 0 ]; then
-            # Update top contributor information
             if [ $commit_count -gt $max_commits ]; then
               max_commits=$commit_count
               top_contributor="$login"
@@ -171,7 +140,6 @@ jobs:
               top_contributor_count=$((top_contributor_count + 1))
             fi
             
-            # Get commit count for this contributor on the dev branch
             branch_commit_count=$(git rev-list --count dev --author="$login")
             
             extra_info="${additional_info[$name]}"
@@ -179,12 +147,10 @@ jobs:
               extra_info=$(echo "$extra_info" | sed 's/\\n/\n- /g')
             fi
             
-            # Construct the developer entry
             developer_entry="◗ **${name}** ${extra_info}
         - Github: [${login}](https://github.com/${login})
         - Commits: ${branch_commit_count}"
 
-            # Add the entry to developers, with a newline if it's not the first entry
             if [ -n "$developers" ]; then
               developers="${developers}
         ${developer_entry}"
@@ -196,14 +162,12 @@ jobs:
           fi
         done <<< "$sorted_contributors"
         
-        # Set the thumbnail URL based on top contributor(s)
         if [ $top_contributor_count -eq 1 ]; then
           thumbnail_url="$top_contributor_avatar"
         else
           thumbnail_url="https://i.imgur.com/5o3Y9Jb.gif"
         fi
         
-        # Truncate field values
         max_length=1000
         commit_messages=$(echo "$COMMIT_LOG" | sed 's/%0A/\n/g; s/^/\n/')
         if [ ${#developers} -gt $max_length ]; then
@@ -213,7 +177,6 @@ jobs:
           commit_messages="${commit_messages:0:$max_length}... (truncated)"
         fi
         
-        # Construct Discord payload
         discord_data=$(jq -nc \
                       --arg field_value "$commit_messages" \
                       --arg author_value "$developers" \
@@ -250,46 +213,44 @@ jobs:
                         "attachments": []
                       }')
         
-        # Send Discord message
         curl -H "Content-Type: application/json" \
              -d "$discord_data" \
              ${{ secrets.DISCORD_WEBHOOK }}
-        echo "You have only send an embed to discord due to SKIP_BUILD being set to true"
         
-        # Upload APK to Discord
-        if [ "$SKIP_BUILD" != "true" ]; then
+        if [ "$SKIP_BUILDING_APK" != "true" ]; then
           curl -F "payload_json=${contentbody}" \
                -F "dantotsu_debug=@app/build/outputs/apk/google/alpha/app-google-alpha.apk" \
                ${{ secrets.DISCORD_WEBHOOK }}
         else
-          echo "Skipping APK upload to Discord due to SKIP_BUILD being set to true"
+          echo "Skipping APK upload to Discord due to SKIP_BUILDING_APK being set to true"
         fi
 
-        # Format commit messages for Telegram
         telegram_commit_messages=$(echo "$COMMIT_LOG" | sed 's/%0A/\n/g' | while read -r line; do
-          message=$(echo "$line" | sed -E 's/● (.*) ~(.*) \[֍\]\((.*)\)/● \1 ~\2 <a href="\3">֍<\/a>/')
-          message=$(echo "$message" | sed -E 's/\[#([0-9]+)\]\((https:\/\/github\.com\/[^)]+)\)/<a href="\2">#\1<\/a>/g')
+          message=$(echo "$line" | sed -E 's/● (.*) ~(.*) \[֍\]\((.*)\)/● \1 ~\2 [֍](\3)/')
+          message=$(echo "$message" | sed -E 's/\[#([0-9]+)\]\((https:\/\/github\.com\/[^)]+)\)/[#\1](\2)/g')
           echo "$message"
         done)
-        telegram_commit_messages="<blockquote>${telegram_commit_messages}</blockquote>"
 
-        # Upload APK to Telegram
+        telegram_data=$(jq -nc \
+                        --arg field_value "$telegram_commit_messages" \
+                        --arg author_value "$developers" \
+                        --arg footer_text "Version $VERSION" \
+                        '{
+                          "chat_id": ${{ secrets.TELEGRAM_CHANNEL_ID }},
+                          "caption": "New Alpha-Build dropped 🔥\n\nCommits:\n$field_value\n\nDevelopers:\n$author_value\n\nVersion: $footer_text",
+                          "parse_mode": "Markdown"
+                        }')
+        
         if [ "$SKIP_BUILD" != "true" ]; then
           APK_PATH="app/build/outputs/apk/google/alpha/app-google-alpha.apk"
-          response=$(curl -sS -f -X POST \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
-            -F "chat_id=${{ secrets.TELEGRAM_CHANNEL_ID }}" \
-            -F "document=@$APK_PATH" \
-            -F "caption=New Alpha-Build dropped 🔥
-        
-        Commits:
-        ${telegram_commit_messages}
-        version: ${VERSION}" \
-            -F "parse_mode=HTML")
+          curl -F "chat_id=${{ secrets.TELEGRAM_CHANNEL_ID }}" \
+               -F "caption=Alpha-Build: ${VERSION}\n\nCommits:\n${telegram_commit_messages}\n\nDevelopers:\n${developers}" \
+               -F "parse_mode=Markdown" \
+               -F "document=@$APK_PATH" \
+               https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
         else
-          echo "Skipping Telegram message and APK upload due to SKIP_BUILD being set to true"
+          echo "Skipping Telegram message and APK upload due to SKIP_BUILDING_APK being set to true"
         fi
-        
       env:
         COMMIT_LOG: ${{ env.COMMIT_LOG }}
         VERSION: ${{ env.VERSION }}
