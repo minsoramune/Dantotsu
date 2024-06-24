@@ -1,3 +1,4 @@
+name: Build APK and Notify Discord
 
 on:
   push:
